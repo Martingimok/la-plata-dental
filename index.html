@@ -1,0 +1,643 @@
+import { useState, useEffect } from "react";
+
+// ─── DATOS INICIALES ──────────────────────────────────────────────────────────
+const INITIAL_DATA = {
+  clientes: [
+    { id: 1, nombre: "Dra. Laura Méndez", telefono: "221-4512300", whatsapp: "2214512300", especialidad: "Ortodoncia", zona: "Centro", notas: "" },
+    { id: 2, nombre: "Dr. Carlos Pérez", telefono: "221-4623100", whatsapp: "2214623100", especialidad: "General", zona: "City Bell", notas: "" },
+  ],
+  productos: [
+    { id: 1, nombre: "Brackets Metálicos MBT", codigo: "BK-001", precio: 4500, stock: 20, categoria: "Brackets", proveedor: "" },
+    { id: 2, nombre: "Alambre NiTi 0.014", codigo: "AL-001", precio: 850, stock: 50, categoria: "Alambres", proveedor: "" },
+    { id: 3, nombre: "Ligaduras Elásticas (pack)", codigo: "LIG-001", precio: 320, stock: 100, categoria: "Accesorios", proveedor: "" },
+  ],
+  remitos: [
+    { id: 1, numero: "0001-000001", fecha: "2025-01-10", cliente: "Dra. Laura Méndez", clienteId: 1, items: [{ productoId: 1, nombre: "Brackets Metálicos MBT", cantidad: 2, precio: 4500 }], total: 9000, estado: "Entregado", notas: "" },
+    { id: 2, numero: "0001-000002", fecha: "2025-02-14", cliente: "Dr. Carlos Pérez", clienteId: 2, items: [{ productoId: 2, nombre: "Alambre NiTi 0.014", cantidad: 5, precio: 850 }, { productoId: 3, nombre: "Ligaduras Elásticas (pack)", cantidad: 3, precio: 320 }], total: 5210, estado: "Entregado", notas: "" },
+    { id: 3, numero: "0001-000003", fecha: "2025-03-01", cliente: "Dra. Laura Méndez", clienteId: 1, items: [{ productoId: 3, nombre: "Ligaduras Elásticas (pack)", cantidad: 10, precio: 320 }], total: 3200, estado: "Pendiente", notas: "Entregar el jueves" },
+  ],
+  nextRemito: 8,
+};
+
+const STORAGE_KEY = "lpd_data_v1";
+
+function loadData() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch (e) {}
+  return INITIAL_DATA;
+}
+
+function saveData(data) {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); } catch (e) {}
+}
+
+const CATEGORIAS = ["Brackets", "Alambres", "Bandas", "Accesorios", "Cementos", "Instrumental", "Otro"];
+const ESPECIALIDADES = ["Ortodoncia", "General", "Periodoncia", "Endodoncia", "Implantología", "Cirugía", "Otra"];
+const ZONAS = ["Centro", "City Bell", "Tolosa", "Villa Elvira", "Berisso", "Ensenada", "Otra"];
+const ESTADOS = ["Pendiente", "Entregado", "Cancelado"];
+
+const fmt = (n) => new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS", maximumFractionDigits: 0 }).format(n);
+const fmtDate = (d) => { if (!d) return ""; const [y, m, day] = d.split("-"); return `${day}/${m}/${y}`; };
+const pad = (n) => `0001-${String(n).padStart(6, "0")}`;
+const todayStr = () => new Date().toISOString().split("T")[0];
+const newId = (arr) => Math.max(0, ...arr.map((x) => x.id)) + 1;
+
+// ─── PDF EXPORT ───────────────────────────────────────────────────────────────
+async function loadJsPDF() {
+  if (window.jspdf) return;
+  await new Promise((res, rej) => {
+    const s = document.createElement("script");
+    s.src = "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js";
+    s.onload = res; s.onerror = rej;
+    document.head.appendChild(s);
+  });
+}
+
+async function exportRemitoPDF(remito) {
+  await loadJsPDF();
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ unit: "mm", format: "a4" });
+  const W = 210, M = 18;
+
+  doc.setFillColor(10, 22, 40);
+  doc.rect(0, 0, W, 44, "F");
+  doc.setTextColor(224, 231, 255);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(20);
+  doc.text("La Plata Dental", M, 18);
+  doc.setFontSize(8);
+  doc.setFont("helvetica", "normal");
+  doc.setTextColor(100, 116, 139);
+  doc.text("DISTRIBUCION DE INSUMOS ORTODONTICOS", M, 25);
+  doc.text("La Plata, Buenos Aires", M, 31);
+
+  doc.setFillColor(37, 99, 235);
+  doc.roundedRect(W - M - 54, 7, 54, 28, 3, 3, "F");
+  doc.setTextColor(255, 255, 255);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(8);
+  doc.text("REMITO", W - M - 54 + 27, 16, { align: "center" });
+  doc.setFontSize(13);
+  doc.text(remito.numero, W - M - 54 + 27, 24, { align: "center" });
+  doc.setFontSize(8);
+  doc.setFont("helvetica", "normal");
+  doc.text(fmtDate(remito.fecha), W - M - 54 + 27, 31, { align: "center" });
+
+  let y = 56;
+  doc.setTextColor(37, 99, 235);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(9);
+  doc.text("CLIENTE", M, y);
+  doc.setDrawColor(37, 99, 235);
+  doc.setLineWidth(0.4);
+  doc.line(M, y + 2, W - M, y + 2);
+  y += 9;
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(13);
+  doc.setTextColor(15, 23, 42);
+  doc.text(remito.cliente, M, y);
+  y += 6;
+  if (remito.notas) {
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(9);
+    doc.setTextColor(71, 85, 105);
+    doc.text("Notas: " + remito.notas, M, y);
+    y += 6;
+  }
+
+  y += 8;
+  doc.setTextColor(37, 99, 235);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(9);
+  doc.text("DETALLE", M, y);
+  doc.line(M, y + 2, W - M, y + 2);
+  y += 8;
+
+  doc.setFillColor(15, 31, 61);
+  doc.rect(M, y - 5, W - M * 2, 8, "F");
+  doc.setTextColor(148, 163, 184);
+  doc.setFontSize(8);
+  doc.text("PRODUCTO", M + 3, y);
+  doc.text("CANT.", 130, y, { align: "right" });
+  doc.text("P. UNIT.", 158, y, { align: "right" });
+  doc.text("SUBTOTAL", W - M - 1, y, { align: "right" });
+  y += 7;
+
+  doc.setFont("helvetica", "normal");
+  remito.items.forEach((item, i) => {
+    if (i % 2 === 0) { doc.setFillColor(248, 250, 252); doc.rect(M, y - 5, W - M * 2, 8, "F"); }
+    doc.setTextColor(15, 23, 42); doc.setFontSize(9);
+    doc.text(item.nombre, M + 3, y);
+    doc.setTextColor(71, 85, 105);
+    doc.text(String(item.cantidad), 130, y, { align: "right" });
+    doc.text(fmt(item.precio), 158, y, { align: "right" });
+    doc.setTextColor(5, 150, 105); doc.setFont("helvetica", "bold");
+    doc.text(fmt(item.cantidad * item.precio), W - M - 1, y, { align: "right" });
+    doc.setFont("helvetica", "normal");
+    y += 8;
+  });
+
+  y += 6;
+  doc.setFillColor(10, 22, 40);
+  doc.rect(W - M - 72, y - 5, 72, 14, "F");
+  doc.setTextColor(148, 163, 184); doc.setFontSize(8); doc.setFont("helvetica", "normal");
+  doc.text("TOTAL", W - M - 36, y + 1, { align: "center" });
+  doc.setTextColor(16, 185, 129); doc.setFont("helvetica", "bold"); doc.setFontSize(14);
+  doc.text(fmt(remito.total), W - M - 2, y + 6, { align: "right" });
+
+  y += 22;
+  const ec = { Entregado: [[5,46,22],[74,222,128]], Pendiente: [[28,17,0],[251,191,36]], Cancelado: [[30,10,10],[248,113,113]] };
+  const [bga, fca] = ec[remito.estado] || [[30,58,95],[148,163,184]];
+  doc.setFillColor(...bga);
+  doc.roundedRect(M, y - 5, 42, 10, 2, 2, "F");
+  doc.setTextColor(...fca); doc.setFontSize(9); doc.setFont("helvetica", "bold");
+  doc.text(remito.estado.toUpperCase(), M + 21, y + 1, { align: "center" });
+
+  doc.setFillColor(10, 22, 40);
+  doc.rect(0, 277, W, 20, "F");
+  doc.setTextColor(100, 116, 139); doc.setFont("helvetica", "normal"); doc.setFontSize(7);
+  doc.text("La Plata Dental  |  Distribucion de Insumos Ortodonticos  |  La Plata, Buenos Aires", W / 2, 288, { align: "center" });
+
+  doc.save(`remito-${remito.numero}.pdf`);
+}
+
+// ─── ESTILOS ──────────────────────────────────────────────────────────────────
+const S = {
+  input: { background: "#0a1628", border: "1px solid #1e3a5f", borderRadius: 8, color: "#e2e8f0", fontSize: 13, padding: "9px 12px", fontFamily: "inherit", outline: "none", width: "100%", boxSizing: "border-box" },
+  btnPrimary: { background: "#2563eb", color: "#fff", border: "1px solid #1d4ed8", borderRadius: 8, padding: "9px 18px", cursor: "pointer", fontSize: 13, fontWeight: 600, fontFamily: "inherit" },
+  btnSuccess: { background: "#064e3b", color: "#34d399", border: "1px solid #065f46", borderRadius: 7, padding: "6px 12px", cursor: "pointer", fontSize: 12, fontFamily: "inherit", fontWeight: 600 },
+  btnGhost: { background: "transparent", color: "#94a3b8", border: "1px solid #1e3a5f", borderRadius: 8, padding: "7px 14px", cursor: "pointer", fontSize: 12, fontFamily: "inherit" },
+  btnDanger: { background: "transparent", color: "#f87171", border: "1px solid #7f1d1d", borderRadius: 6, padding: "4px 10px", cursor: "pointer", fontSize: 12, fontFamily: "inherit" },
+  card: { background: "#0f1f3d", border: "1px solid #1e3a5f", borderRadius: 12 },
+  th: { textAlign: "left", padding: "12px 16px", color: "#475569", fontSize: 11, textTransform: "uppercase", letterSpacing: 1, fontWeight: 500 },
+  td: { padding: "11px 16px", borderTop: "1px solid #1e3a5f" },
+};
+
+const Bdg = ({ bg, color, text }) => (
+  <span style={{ background: bg, color, padding: "2px 10px", borderRadius: 20, fontSize: 11, fontWeight: 600, display: "inline-block" }}>{text}</span>
+);
+const EstadoBdg = ({ e }) => {
+  const m = { Entregado: ["#052e16","#4ade80"], Pendiente: ["#1c1100","#fbbf24"], Cancelado: ["#1e0a0a","#f87171"] };
+  const [bg, color] = m[e] || ["#1e3a5f","#94a3b8"];
+  return <Bdg bg={bg} color={color} text={e} />;
+};
+
+function Field({ label, children }) {
+  return <div><div style={{ color: "#64748b", fontSize: 11, textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>{label}</div>{children}</div>;
+}
+function Modal({ title, children, onClose, onSave, wide, saveLabel = "Guardar" }) {
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.78)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 200, padding: 20 }}>
+      <div style={{ ...S.card, width: "100%", maxWidth: wide ? 720 : 500, maxHeight: "92vh", overflowY: "auto", padding: 28 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 22 }}>
+          <h2 style={{ color: "#e2e8f0", fontFamily: "'Playfair Display',serif", fontSize: 18, margin: 0 }}>{title}</h2>
+          <button onClick={onClose} style={{ background: "none", border: "none", color: "#64748b", fontSize: 20, cursor: "pointer" }}>✕</button>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>{children}</div>
+        <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 24 }}>
+          <button onClick={onClose} style={S.btnGhost}>Cancelar</button>
+          <button onClick={onSave} style={S.btnPrimary}>{saveLabel}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+function Confirm({ msg, onConfirm, onCancel }) {
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.78)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 300 }}>
+      <div style={{ ...S.card, border: "1px solid #7f1d1d", padding: 28, maxWidth: 340, textAlign: "center" }}>
+        <div style={{ color: "#f87171", fontSize: 30, marginBottom: 12 }}>⚠</div>
+        <div style={{ color: "#e2e8f0", marginBottom: 20, fontSize: 14 }}>{msg}</div>
+        <div style={{ display: "flex", gap: 10, justifyContent: "center" }}>
+          <button onClick={onCancel} style={S.btnGhost}>Cancelar</button>
+          <button onClick={onConfirm} style={{ ...S.btnPrimary, background: "#991b1b", borderColor: "#7f1d1d" }}>Eliminar</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+function PageHeader({ title, subtitle, action }) {
+  return (
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 24 }}>
+      <div>
+        <h1 style={{ color: "#e2e8f0", fontFamily: "'Playfair Display',serif", fontSize: 26, fontWeight: 700, margin: 0 }}>{title}</h1>
+        {subtitle && <p style={{ color: "#64748b", fontSize: 13, margin: "4px 0 0" }}>{subtitle}</p>}
+      </div>
+      {action}
+    </div>
+  );
+}
+
+// ─── NAV ──────────────────────────────────────────────────────────────────────
+function Nav({ active, onChange }) {
+  const tabs = [
+    { id: "dashboard", label: "Inicio", icon: "◈" },
+    { id: "clientes", label: "Clientes", icon: "◉" },
+    { id: "productos", label: "Productos", icon: "◆" },
+    { id: "remitos", label: "Remitos", icon: "◐" },
+  ];
+  return (
+    <nav style={{ background: "#0a1628", borderBottom: "1px solid #1e3a5f", display: "flex", alignItems: "center", padding: "0 24px", gap: 4, position: "sticky", top: 0, zIndex: 100 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginRight: 32, padding: "14px 0" }}>
+        <div style={{ width: 32, height: 32, borderRadius: 8, background: "linear-gradient(135deg,#2563eb,#0ea5e9)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>⊕</div>
+        <div>
+          <div style={{ color: "#e2e8f0", fontFamily: "'Playfair Display',serif", fontWeight: 700, fontSize: 15 }}>La Plata Dental</div>
+          <div style={{ color: "#64748b", fontSize: 10, letterSpacing: 1.5, textTransform: "uppercase" }}>Gestión Comercial</div>
+        </div>
+      </div>
+      {tabs.map((t) => (
+        <button key={t.id} onClick={() => onChange(t.id)}
+          style={{ background: active === t.id ? "#1e3a5f" : "transparent", color: active === t.id ? "#60a5fa" : "#94a3b8", border: "none", padding: "16px 18px", cursor: "pointer", fontSize: 13, fontFamily: "inherit", fontWeight: active === t.id ? 600 : 400, borderBottom: active === t.id ? "2px solid #2563eb" : "2px solid transparent", transition: "all 0.15s", display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={{ fontSize: 10 }}>{t.icon}</span>{t.label}
+        </button>
+      ))}
+    </nav>
+  );
+}
+
+// ─── DASHBOARD ────────────────────────────────────────────────────────────────
+function Dashboard({ data, onNav }) {
+  const totalVentas = data.remitos.filter((r) => r.estado !== "Cancelado").reduce((a, r) => a + r.total, 0);
+  const pendientes = data.remitos.filter((r) => r.estado === "Pendiente").length;
+  const stockBajo = data.productos.filter((p) => p.stock < 10);
+  const topClientes = Object.values(
+    data.remitos.filter((r) => r.estado !== "Cancelado").reduce((acc, r) => {
+      if (!acc[r.clienteId]) acc[r.clienteId] = { nombre: r.cliente, total: 0, cant: 0 };
+      acc[r.clienteId].total += r.total; acc[r.clienteId].cant += 1;
+      return acc;
+    }, {})
+  ).sort((a, b) => b.total - a.total).slice(0, 3);
+
+  return (
+    <div style={{ padding: "28px 32px", maxWidth: 1100, margin: "0 auto" }}>
+      <PageHeader title="Panel principal" subtitle="Resumen del negocio" />
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 16, marginBottom: 24 }}>
+        {[
+          { label: "Clientes", value: data.clientes.length, icon: "◉", color: "#2563eb", nav: "clientes" },
+          { label: "Productos", value: data.productos.length, icon: "◆", color: "#0ea5e9", nav: "productos" },
+          { label: "Total facturado", value: fmt(totalVentas), icon: "◈", color: "#10b981", nav: "remitos" },
+          { label: "Remitos pendientes", value: pendientes, icon: "◐", color: pendientes > 0 ? "#f59e0b" : "#64748b", nav: "remitos" },
+        ].map((c, i) => (
+          <div key={i} onClick={() => onNav(c.nav)} style={{ ...S.card, padding: "20px 22px", position: "relative", overflow: "hidden", cursor: "pointer" }}>
+            <div style={{ position: "absolute", top: 14, right: 16, fontSize: 22, color: c.color, opacity: 0.2 }}>{c.icon}</div>
+            <div style={{ color: "#94a3b8", fontSize: 11, letterSpacing: 1.2, textTransform: "uppercase", marginBottom: 8 }}>{c.label}</div>
+            <div style={{ color: "#e2e8f0", fontSize: 26, fontWeight: 700, fontFamily: "'Playfair Display',serif" }}>{c.value}</div>
+          </div>
+        ))}
+      </div>
+      {stockBajo.length > 0 && (
+        <div style={{ background: "#1c1100", border: "1px solid #854d0e", borderRadius: 10, padding: "12px 18px", marginBottom: 20, color: "#fbbf24", fontSize: 13 }}>
+          ⚠ Stock bajo: {stockBajo.map((p) => p.nombre).join(", ")}
+        </div>
+      )}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 320px", gap: 20 }}>
+        <div style={{ ...S.card, padding: 24 }}>
+          <div style={{ color: "#94a3b8", fontSize: 11, letterSpacing: 1.2, textTransform: "uppercase", marginBottom: 16 }}>Últimos remitos</div>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead><tr>{["Número","Fecha","Cliente","Total","Estado"].map((h) => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
+            <tbody>
+              {[...data.remitos].reverse().slice(0, 5).map((r) => (
+                <tr key={r.id}>
+                  <td style={{ ...S.td, color: "#60a5fa", fontFamily: "monospace", fontSize: 12 }}>{r.numero}</td>
+                  <td style={{ ...S.td, color: "#94a3b8", fontSize: 13 }}>{fmtDate(r.fecha)}</td>
+                  <td style={{ ...S.td, color: "#e2e8f0", fontSize: 13 }}>{r.cliente}</td>
+                  <td style={{ ...S.td, color: "#10b981", fontWeight: 600, fontSize: 13 }}>{fmt(r.total)}</td>
+                  <td style={S.td}><EstadoBdg e={r.estado} /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div style={{ ...S.card, padding: 24 }}>
+          <div style={{ color: "#94a3b8", fontSize: 11, letterSpacing: 1.2, textTransform: "uppercase", marginBottom: 16 }}>Top clientes</div>
+          {topClientes.map((c, i) => (
+            <div key={i} style={{ borderTop: i > 0 ? "1px solid #1e3a5f" : "none", paddingTop: i > 0 ? 14 : 0, marginTop: i > 0 ? 14 : 0 }}>
+              <div style={{ display: "flex", justifyContent: "space-between" }}>
+                <div style={{ color: "#e2e8f0", fontSize: 13, fontWeight: 500 }}>{c.nombre}</div>
+                <div style={{ color: "#10b981", fontSize: 13, fontWeight: 700 }}>{fmt(c.total)}</div>
+              </div>
+              <div style={{ color: "#475569", fontSize: 11, marginTop: 3 }}>{c.cant} remito{c.cant !== 1 ? "s" : ""}</div>
+            </div>
+          ))}
+          {topClientes.length === 0 && <div style={{ color: "#475569", fontSize: 13 }}>Sin datos aún</div>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── HISTORIAL ────────────────────────────────────────────────────────────────
+function HistorialModal({ cliente, remitos, onClose }) {
+  const cr = remitos.filter((r) => r.clienteId === cliente.id);
+  const total = cr.filter((r) => r.estado !== "Cancelado").reduce((a, r) => a + r.total, 0);
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.78)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 200, padding: 20 }}>
+      <div style={{ ...S.card, width: "100%", maxWidth: 680, maxHeight: "90vh", overflowY: "auto", padding: 28 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20 }}>
+          <div>
+            <h2 style={{ color: "#e2e8f0", fontFamily: "'Playfair Display',serif", fontSize: 18, margin: 0 }}>{cliente.nombre}</h2>
+            <div style={{ color: "#64748b", fontSize: 12, marginTop: 4 }}>{cliente.especialidad} · {cliente.zona}</div>
+            {cliente.whatsapp && <a href={`https://wa.me/549${cliente.whatsapp.replace(/\D/g,"")}`} target="_blank" rel="noreferrer" style={{ color: "#4ade80", fontSize: 12, marginTop: 4, display: "block", textDecoration: "none" }}>💬 Contactar por WhatsApp</a>}
+          </div>
+          <button onClick={onClose} style={{ background: "none", border: "none", color: "#64748b", fontSize: 20, cursor: "pointer" }}>✕</button>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 12, marginBottom: 20 }}>
+          {[{ label: "Remitos totales", value: cr.length }, { label: "Entregados", value: cr.filter((r) => r.estado === "Entregado").length }, { label: "Total comprado", value: fmt(total) }].map((s, i) => (
+            <div key={i} style={{ background: "#0a1628", border: "1px solid #1e3a5f", borderRadius: 10, padding: "14px 16px" }}>
+              <div style={{ color: "#64748b", fontSize: 10, textTransform: "uppercase", letterSpacing: 1 }}>{s.label}</div>
+              <div style={{ color: "#e2e8f0", fontSize: 18, fontWeight: 700, marginTop: 4, fontFamily: "'Playfair Display',serif" }}>{s.value}</div>
+            </div>
+          ))}
+        </div>
+        {cr.length === 0 ? <div style={{ color: "#475569", textAlign: "center", padding: "24px 0" }}>Sin remitos para este cliente</div> : (
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead><tr style={{ background: "#0a1628" }}>{["Número","Fecha","Productos","Total","Estado"].map((h) => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
+            <tbody>
+              {[...cr].reverse().map((r) => (
+                <tr key={r.id}>
+                  <td style={{ ...S.td, color: "#60a5fa", fontFamily: "monospace", fontSize: 12 }}>{r.numero}</td>
+                  <td style={{ ...S.td, color: "#94a3b8", fontSize: 13 }}>{fmtDate(r.fecha)}</td>
+                  <td style={{ ...S.td, color: "#94a3b8", fontSize: 12 }}>{r.items.map((i) => `${i.nombre} ×${i.cantidad}`).join(", ")}</td>
+                  <td style={{ ...S.td, color: "#10b981", fontWeight: 600 }}>{fmt(r.total)}</td>
+                  <td style={S.td}><EstadoBdg e={r.estado} /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── CLIENTES ─────────────────────────────────────────────────────────────────
+function Clientes({ data, onChange }) {
+  const [search, setSearch] = useState("");
+  const [modal, setModal] = useState(null);
+  const [historial, setHistorial] = useState(null);
+  const [confirm, setConfirm] = useState(null);
+  const blank = { nombre: "", telefono: "", whatsapp: "", especialidad: "Ortodoncia", zona: "Centro", notas: "" };
+  const [form, setForm] = useState(blank);
+  const filtered = data.clientes.filter((c) => [c.nombre,c.especialidad,c.zona].some((f) => f.toLowerCase().includes(search.toLowerCase())));
+  const save = () => {
+    if (!form.nombre.trim()) return;
+    if (modal === "new") onChange({ ...data, clientes: [...data.clientes, { ...form, id: newId(data.clientes) }] });
+    else onChange({ ...data, clientes: data.clientes.map((c) => c.id === modal.id ? { ...form, id: c.id } : c) });
+    setModal(null);
+  };
+  return (
+    <div style={{ padding: "28px 32px", maxWidth: 1100, margin: "0 auto" }}>
+      <PageHeader title="Clientes" subtitle={`${data.clientes.length} odontólogos registrados`}
+        action={<button onClick={() => { setForm(blank); setModal("new"); }} style={S.btnPrimary}>+ Nuevo cliente</button>} />
+      <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar por nombre, especialidad o zona…" style={{ ...S.input, marginBottom: 20 }} />
+      <div style={{ ...S.card, overflow: "hidden" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <thead><tr style={{ background: "#0a1628" }}>{["Nombre","Teléfono","WhatsApp","Especialidad","Zona",""].map((h) => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
+          <tbody>
+            {filtered.length === 0 ? <tr><td colSpan={6} style={{ padding: 32, textAlign: "center", color: "#475569" }}>Sin resultados</td></tr>
+              : filtered.map((c) => (
+                <tr key={c.id}>
+                  <td style={{ ...S.td, color: "#e2e8f0", fontWeight: 500 }}>{c.nombre}</td>
+                  <td style={{ ...S.td, color: "#94a3b8", fontSize: 13 }}>{c.telefono}</td>
+                  <td style={S.td}>{c.whatsapp ? <a href={`https://wa.me/549${c.whatsapp.replace(/\D/g,"")}`} target="_blank" rel="noreferrer" style={{ color: "#4ade80", fontSize: 13, textDecoration: "none" }}>💬 {c.whatsapp}</a> : <span style={{ color: "#475569" }}>—</span>}</td>
+                  <td style={S.td}><Bdg bg="#1e3a5f" color="#60a5fa" text={c.especialidad} /></td>
+                  <td style={{ ...S.td, color: "#94a3b8", fontSize: 13 }}>{c.zona}</td>
+                  <td style={{ ...S.td, display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                    <button onClick={() => setHistorial(c)} style={{ ...S.btnGhost, fontSize: 11 }}>Historial</button>
+                    <button onClick={() => { setForm({ ...c }); setModal(c); }} style={S.btnGhost}>Editar</button>
+                    <button onClick={() => setConfirm(c.id)} style={S.btnDanger}>✕</button>
+                  </td>
+                </tr>
+              ))}
+          </tbody>
+        </table>
+      </div>
+      {modal && (
+        <Modal title={modal === "new" ? "Nuevo cliente" : "Editar cliente"} onClose={() => setModal(null)} onSave={save}>
+          <Field label="Nombre completo"><input style={S.input} value={form.nombre} onChange={(e) => setForm({ ...form, nombre: e.target.value })} placeholder="Dr./Dra. Nombre Apellido" /></Field>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+            <Field label="Teléfono"><input style={S.input} value={form.telefono} onChange={(e) => setForm({ ...form, telefono: e.target.value })} /></Field>
+            <Field label="WhatsApp"><input style={S.input} value={form.whatsapp} onChange={(e) => setForm({ ...form, whatsapp: e.target.value })} placeholder="221XXXXXXX" /></Field>
+            <Field label="Especialidad"><select style={S.input} value={form.especialidad} onChange={(e) => setForm({ ...form, especialidad: e.target.value })}>{ESPECIALIDADES.map((e) => <option key={e}>{e}</option>)}</select></Field>
+            <Field label="Zona"><select style={S.input} value={form.zona} onChange={(e) => setForm({ ...form, zona: e.target.value })}>{ZONAS.map((z) => <option key={z}>{z}</option>)}</select></Field>
+          </div>
+          <Field label="Notas"><textarea style={{ ...S.input, resize: "vertical", minHeight: 60 }} value={form.notas} onChange={(e) => setForm({ ...form, notas: e.target.value })} /></Field>
+        </Modal>
+      )}
+      {historial && <HistorialModal cliente={historial} remitos={data.remitos} onClose={() => setHistorial(null)} />}
+      {confirm && <Confirm msg="¿Eliminar este cliente?" onConfirm={() => { onChange({ ...data, clientes: data.clientes.filter((c) => c.id !== confirm) }); setConfirm(null); }} onCancel={() => setConfirm(null)} />}
+    </div>
+  );
+}
+
+// ─── PRODUCTOS ────────────────────────────────────────────────────────────────
+function Productos({ data, onChange }) {
+  const [search, setSearch] = useState("");
+  const [modal, setModal] = useState(null);
+  const [confirm, setConfirm] = useState(null);
+  const blank = { nombre: "", codigo: "", precio: "", stock: "", categoria: "Brackets", proveedor: "" };
+  const [form, setForm] = useState(blank);
+  const filtered = data.productos.filter((p) => [p.nombre,p.codigo,p.categoria].some((f) => f.toLowerCase().includes(search.toLowerCase())));
+  const save = () => {
+    if (!form.nombre.trim()) return;
+    const prod = { ...form, precio: Number(form.precio)||0, stock: Number(form.stock)||0 };
+    if (modal === "new") onChange({ ...data, productos: [...data.productos, { ...prod, id: newId(data.productos) }] });
+    else onChange({ ...data, productos: data.productos.map((p) => p.id === modal.id ? { ...prod, id: p.id } : p) });
+    setModal(null);
+  };
+  return (
+    <div style={{ padding: "28px 32px", maxWidth: 1100, margin: "0 auto" }}>
+      <PageHeader title="Productos" subtitle={`${data.productos.length} en catálogo`}
+        action={<button onClick={() => { setForm(blank); setModal("new"); }} style={S.btnPrimary}>+ Nuevo producto</button>} />
+      <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar por nombre, código o categoría…" style={{ ...S.input, marginBottom: 20 }} />
+      <div style={{ ...S.card, overflow: "hidden" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <thead><tr style={{ background: "#0a1628" }}>{["Código","Nombre","Categoría","Precio","Stock",""].map((h) => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
+          <tbody>
+            {filtered.length === 0 ? <tr><td colSpan={6} style={{ padding: 32, textAlign: "center", color: "#475569" }}>Sin resultados</td></tr>
+              : filtered.map((p) => (
+                <tr key={p.id}>
+                  <td style={{ ...S.td, color: "#60a5fa", fontFamily: "monospace", fontSize: 12 }}>{p.codigo}</td>
+                  <td style={{ ...S.td, color: "#e2e8f0", fontWeight: 500 }}>{p.nombre}</td>
+                  <td style={S.td}><Bdg bg="#1e3a5f" color="#94a3b8" text={p.categoria} /></td>
+                  <td style={{ ...S.td, color: "#10b981", fontWeight: 600 }}>{fmt(p.precio)}</td>
+                  <td style={S.td}><Bdg bg={p.stock < 10 ? "#1c1100" : "#052e16"} color={p.stock < 10 ? "#fbbf24" : "#4ade80"} text={`${p.stock} u.`} /></td>
+                  <td style={{ ...S.td, display: "flex", gap: 8, justifyContent: "flex-end" }}>
+                    <button onClick={() => { setForm({ ...p, precio: String(p.precio), stock: String(p.stock) }); setModal(p); }} style={S.btnGhost}>Editar</button>
+                    <button onClick={() => setConfirm(p.id)} style={S.btnDanger}>✕</button>
+                  </td>
+                </tr>
+              ))}
+          </tbody>
+        </table>
+      </div>
+      {modal && (
+        <Modal title={modal === "new" ? "Nuevo producto" : "Editar producto"} onClose={() => setModal(null)} onSave={save}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+            <Field label="Código"><input style={S.input} value={form.codigo} onChange={(e) => setForm({ ...form, codigo: e.target.value })} /></Field>
+            <Field label="Categoría"><select style={S.input} value={form.categoria} onChange={(e) => setForm({ ...form, categoria: e.target.value })}>{CATEGORIAS.map((c) => <option key={c}>{c}</option>)}</select></Field>
+          </div>
+          <Field label="Nombre"><input style={S.input} value={form.nombre} onChange={(e) => setForm({ ...form, nombre: e.target.value })} /></Field>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+            <Field label="Precio ($)"><input style={S.input} type="number" value={form.precio} onChange={(e) => setForm({ ...form, precio: e.target.value })} /></Field>
+            <Field label="Stock (u.)"><input style={S.input} type="number" value={form.stock} onChange={(e) => setForm({ ...form, stock: e.target.value })} /></Field>
+          </div>
+          <Field label="Proveedor"><input style={S.input} value={form.proveedor} onChange={(e) => setForm({ ...form, proveedor: e.target.value })} /></Field>
+        </Modal>
+      )}
+      {confirm && <Confirm msg="¿Eliminar este producto?" onConfirm={() => { onChange({ ...data, productos: data.productos.filter((p) => p.id !== confirm) }); setConfirm(null); }} onCancel={() => setConfirm(null)} />}
+    </div>
+  );
+}
+
+// ─── REMITO FORM ──────────────────────────────────────────────────────────────
+function RemitoForm({ data, remito, numero, onSave, onClose }) {
+  const isNew = !remito;
+  const [form, setForm] = useState(remito
+    ? { clienteId: String(remito.clienteId), fecha: remito.fecha, items: [...remito.items], notas: remito.notas, estado: remito.estado }
+    : { clienteId: data.clientes[0]?.id ? String(data.clientes[0].id) : "", fecha: todayStr(), items: [], notas: "", estado: "Pendiente" }
+  );
+  const [ip, setIp] = useState({ productoId: data.productos[0]?.id ? String(data.productos[0].id) : "", cantidad: "1" });
+  const addItem = () => {
+    const prod = data.productos.find((p) => p.id === Number(ip.productoId));
+    if (!prod || Number(ip.cantidad) < 1) return;
+    setForm((f) => ({ ...f, items: [...f.items, { productoId: prod.id, nombre: prod.nombre, cantidad: Number(ip.cantidad), precio: prod.precio }] }));
+    setIp({ productoId: data.productos[0]?.id ? String(data.productos[0].id) : "", cantidad: "1" });
+  };
+  const removeItem = (i) => setForm((f) => ({ ...f, items: f.items.filter((_, idx) => idx !== i) }));
+  const total = form.items.reduce((a, i) => a + i.cantidad * i.precio, 0);
+  const save = () => {
+    if (!form.clienteId || form.items.length === 0) return;
+    const cliente = data.clientes.find((c) => c.id === Number(form.clienteId));
+    onSave({ clienteId: Number(form.clienteId), cliente: cliente.nombre, fecha: form.fecha, items: form.items, total, notas: form.notas, estado: form.estado });
+  };
+  return (
+    <Modal title={isNew ? `Nuevo remito · ${numero}` : `Editar ${remito.numero}`} onClose={onClose} onSave={save} wide saveLabel={isNew ? "Crear remito" : "Guardar cambios"}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+        <Field label="Cliente">
+          <select style={S.input} value={form.clienteId} onChange={(e) => setForm({ ...form, clienteId: e.target.value })}>
+            <option value="">— seleccionar —</option>
+            {data.clientes.map((c) => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+          </select>
+        </Field>
+        <Field label="Fecha"><input style={S.input} type="date" value={form.fecha} onChange={(e) => setForm({ ...form, fecha: e.target.value })} /></Field>
+      </div>
+      <div style={{ background: "#0a1628", border: "1px solid #1e3a5f", borderRadius: 10, padding: 16 }}>
+        <div style={{ color: "#94a3b8", fontSize: 11, textTransform: "uppercase", letterSpacing: 1, marginBottom: 12 }}>Agregar productos</div>
+        <div style={{ display: "flex", gap: 10 }}>
+          <div style={{ flex: 1 }}><select style={S.input} value={ip.productoId} onChange={(e) => setIp({ ...ip, productoId: e.target.value })}><option value="">— elegir —</option>{data.productos.map((p) => <option key={p.id} value={p.id}>{p.nombre} · {fmt(p.precio)}</option>)}</select></div>
+          <div style={{ width: 80 }}><input style={S.input} type="number" min="1" value={ip.cantidad} onChange={(e) => setIp({ ...ip, cantidad: e.target.value })} placeholder="Cant." /></div>
+          <button onClick={addItem} style={S.btnPrimary}>+ Agregar</button>
+        </div>
+        {form.items.length > 0 && (
+          <table style={{ width: "100%", borderCollapse: "collapse", marginTop: 14 }}>
+            <thead><tr style={{ color: "#475569", fontSize: 11 }}>{["Producto","Cant.","P.Unit.","Subtotal",""].map((h) => <th key={h} style={{ textAlign: "left", padding: "4px 8px", fontWeight: 500 }}>{h}</th>)}</tr></thead>
+            <tbody>
+              {form.items.map((item, i) => (
+                <tr key={i} style={{ borderTop: "1px solid #1e3a5f" }}>
+                  <td style={{ padding: "8px", color: "#e2e8f0", fontSize: 13 }}>{item.nombre}</td>
+                  <td style={{ padding: "8px", color: "#94a3b8", fontSize: 13 }}>{item.cantidad}</td>
+                  <td style={{ padding: "8px", color: "#94a3b8", fontSize: 13 }}>{fmt(item.precio)}</td>
+                  <td style={{ padding: "8px", color: "#10b981", fontWeight: 600 }}>{fmt(item.cantidad * item.precio)}</td>
+                  <td style={{ padding: "8px" }}><button onClick={() => removeItem(i)} style={S.btnDanger}>✕</button></td>
+                </tr>
+              ))}
+              <tr style={{ borderTop: "1px solid #2563eb" }}>
+                <td colSpan={3} style={{ padding: "8px", color: "#94a3b8", fontSize: 12, textAlign: "right" }}>TOTAL</td>
+                <td style={{ padding: "8px", color: "#10b981", fontSize: 16, fontWeight: 700 }}>{fmt(total)}</td>
+                <td />
+              </tr>
+            </tbody>
+          </table>
+        )}
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+        <Field label="Estado"><select style={S.input} value={form.estado} onChange={(e) => setForm({ ...form, estado: e.target.value })}>{ESTADOS.map((e) => <option key={e}>{e}</option>)}</select></Field>
+        <Field label="Notas"><input style={S.input} value={form.notas} onChange={(e) => setForm({ ...form, notas: e.target.value })} /></Field>
+      </div>
+    </Modal>
+  );
+}
+
+// ─── REMITOS ──────────────────────────────────────────────────────────────────
+function Remitos({ data, onChange }) {
+  const [search, setSearch] = useState("");
+  const [filtroEstado, setFiltroEstado] = useState("Todos");
+  const [modal, setModal] = useState(null);
+  const [confirm, setConfirm] = useState(null);
+  const [pdfLoading, setPdfLoading] = useState(null);
+  const filtered = data.remitos.filter((r) => {
+    const ms = r.numero.includes(search) || r.cliente.toLowerCase().includes(search.toLowerCase());
+    const me = filtroEstado === "Todos" || r.estado === filtroEstado;
+    return ms && me;
+  });
+  const handleSave = (fields) => {
+    if (modal === "new") onChange({ ...data, remitos: [...data.remitos, { id: newId(data.remitos), numero: pad(data.nextRemito), ...fields }], nextRemito: data.nextRemito + 1 });
+    else onChange({ ...data, remitos: data.remitos.map((r) => r.id === modal.id ? { ...r, ...fields } : r) });
+    setModal(null);
+  };
+  const handlePDF = async (r) => { setPdfLoading(r.id); try { await exportRemitoPDF(r); } finally { setPdfLoading(null); } };
+  const changeEstado = (id, estado) => onChange({ ...data, remitos: data.remitos.map((r) => r.id === id ? { ...r, estado } : r) });
+  return (
+    <div style={{ padding: "28px 32px", maxWidth: 1100, margin: "0 auto" }}>
+      <PageHeader title="Remitos" subtitle={`Próximo: ${pad(data.nextRemito)}`}
+        action={<button onClick={() => setModal("new")} style={S.btnPrimary}>+ Nuevo remito</button>} />
+      <div style={{ display: "flex", gap: 12, marginBottom: 20 }}>
+        <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar por número o cliente…" style={{ ...S.input, flex: 1 }} />
+        <select value={filtroEstado} onChange={(e) => setFiltroEstado(e.target.value)} style={{ ...S.input, width: 160 }}>
+          <option>Todos</option>{ESTADOS.map((e) => <option key={e}>{e}</option>)}
+        </select>
+      </div>
+      <div style={{ ...S.card, overflow: "hidden" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <thead><tr style={{ background: "#0a1628" }}>{["Número","Fecha","Cliente","Total","Estado",""].map((h) => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
+          <tbody>
+            {filtered.length === 0 ? <tr><td colSpan={6} style={{ padding: 32, textAlign: "center", color: "#475569" }}>Sin remitos</td></tr>
+              : [...filtered].reverse().map((r) => (
+                <tr key={r.id}>
+                  <td style={{ ...S.td, color: "#60a5fa", fontFamily: "monospace", fontSize: 12 }}>{r.numero}</td>
+                  <td style={{ ...S.td, color: "#94a3b8", fontSize: 13 }}>{fmtDate(r.fecha)}</td>
+                  <td style={{ ...S.td, color: "#e2e8f0" }}>{r.cliente}</td>
+                  <td style={{ ...S.td, color: "#10b981", fontWeight: 600 }}>{fmt(r.total)}</td>
+                  <td style={S.td}>
+                    <select value={r.estado} onChange={(e) => changeEstado(r.id, e.target.value)}
+                      style={{ background: r.estado==="Entregado"?"#052e16":r.estado==="Pendiente"?"#1c1100":"#1e0a0a", color: r.estado==="Entregado"?"#4ade80":r.estado==="Pendiente"?"#fbbf24":"#f87171", border: "none", borderRadius: 20, padding: "3px 10px", fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+                      {ESTADOS.map((e) => <option key={e} style={{ background: "#0f1f3d", color: "#e2e8f0" }}>{e}</option>)}
+                    </select>
+                  </td>
+                  <td style={{ ...S.td, display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                    <button onClick={() => handlePDF(r)} style={S.btnSuccess} disabled={pdfLoading === r.id}>{pdfLoading === r.id ? "…" : "↓ PDF"}</button>
+                    <button onClick={() => setModal(r)} style={S.btnGhost}>Editar</button>
+                    <button onClick={() => setConfirm(r.id)} style={S.btnDanger}>✕</button>
+                  </td>
+                </tr>
+              ))}
+          </tbody>
+        </table>
+      </div>
+      {modal && <RemitoForm data={data} remito={modal === "new" ? null : modal} numero={pad(data.nextRemito)} onSave={handleSave} onClose={() => setModal(null)} />}
+      {confirm && <Confirm msg="¿Eliminar este remito?" onConfirm={() => { onChange({ ...data, remitos: data.remitos.filter((r) => r.id !== confirm) }); setConfirm(null); }} onCancel={() => setConfirm(null)} />}
+    </div>
+  );
+}
+
+// ─── ROOT ─────────────────────────────────────────────────────────────────────
+export default function App() {
+  const [tab, setTab] = useState("dashboard");
+  const [data, setData] = useState(loadData);
+
+  useEffect(() => { saveData(data); }, [data]);
+
+  return (
+    <div style={{ minHeight: "100vh", background: "#060f1e", fontFamily: "'DM Sans','Segoe UI',sans-serif" }}>
+      <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
+      <Nav active={tab} onChange={setTab} />
+      {tab === "dashboard" && <Dashboard data={data} onNav={setTab} />}
+      {tab === "clientes" && <Clientes data={data} onChange={setData} />}
+      {tab === "productos" && <Productos data={data} onChange={setData} />}
+      {tab === "remitos" && <Remitos data={data} onChange={setData} />}
+    </div>
+  );
+}
